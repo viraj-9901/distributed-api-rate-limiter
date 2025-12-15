@@ -2,47 +2,58 @@
 let windowSize = 60000; //1 minute
 let maxRequests = 100; //max 100 requests per window
 let bucketNumber = 12;
-let bucketSize = 5; // windowSize / bucketNumber = 60 / 12 = 5 requests per bucket
+let bucketSize = 5000; // windowSize / bucketNumber = 60000 / 12 = 5000 requests per bucket
 
-let users = new Map(); //userId -> buffer
+interface UserData {
+    counts: number[];
+    lastBucketIndex: number;
+    lastAccessTime: number;
+}
+
+const users = new Map<string, UserData>();
 
 function allowRequest(userId: string): boolean {
-    let currentTime = Date.now();
-    let currentBucketIndex = Math.floor((currentTime / bucketSize) % bucketNumber);
-    
-    let data = users.get(userId);
-    if(!users.has(userId)){
-        let buckets = { counts: new Array(bucketNumber).fill(0), lastAccessed: currentTime };
-        buckets.counts[currentBucketIndex] = 1;
-        users.set(userId, buckets);
+    const currentTime = Date.now();
+    const currentBucketIndex = Math.floor((currentTime / bucketSize) % bucketNumber);
+
+    if (!users.has(userId)) {
+        const data: UserData = {
+            counts: new Array(bucketNumber).fill(0),
+            lastBucketIndex: currentBucketIndex,
+            lastAccessTime: currentTime
+        };
+        data.counts[currentBucketIndex] = 1;
+        users.set(userId, data);
         return true;
     }
 
-    const timePassed = currentTime - data.lastAccessed;
-    if(timePassed >= windowSize){
+    const data = users.get(userId)!;
+    const timePassed = currentTime - data.lastAccessTime;
+
+    // Reset all buckets if entire window has passed
+    if (timePassed >= windowSize) {
         data.counts.fill(0);
-    }
-
-    const buckets = users.get(userId);
-    //Reset old bucket
-    buckets.counts[currentBucketIndex] = 0;
-
-    for(let i = 1; i < bucketNumber; i++){
-        const offset = (currentBucketIndex - i + bucketNumber) % bucketNumber;
-        const bucketGlobalIndex = Math.floor(currentTime / bucketSize) - offset;
-        const bucketStartTime = bucketGlobalIndex * bucketSize;
-
-        if(bucketStartTime < windowSize) {
-            data.counts[i] = 0;
+    } else {
+        // Clear buckets that have expired since last access
+        const bucketsPassed = Math.floor(timePassed / bucketSize);
+        for (let i = 1; i <= Math.min(bucketsPassed, bucketNumber); i++) {
+            const bucketToClear = (data.lastBucketIndex + i) % bucketNumber;
+            data.counts[bucketToClear] = 0;
         }
     }
-    //Count requests in the window
-    buckets.counts[currentBucketIndex] += 1;
 
-    const totalRequests = buckets.counts.reduce((sum, count) => sum + count, 0);
+    // Count total requests in window
+    const totalRequests = data.counts.reduce((sum, count) => sum + count, 0);
 
-    return totalRequests <= maxRequests;
+    // Check if request is allowed before incrementing
+    if (totalRequests >= maxRequests) {
+        return false;
+    }
 
+    // Allow request and update state
+    data.counts[currentBucketIndex] += 1;
+    data.lastBucketIndex = currentBucketIndex;
+    data.lastAccessTime = currentTime;
+
+    return true;
 }
-
-//Token Bucket Rate Limiter Middleware
