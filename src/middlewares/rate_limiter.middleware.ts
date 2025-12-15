@@ -57,3 +57,50 @@ function allowRequest(userId: string): boolean {
 
     return true;
 }
+
+//Token Bucket Rate Limiter Middleware
+let bucketCapacity = 100;
+let refillRate = 10;
+let refillTime = 10000;
+
+interface UserDataTokenBucket {
+    tokens: number;
+    lastRefillTime: number;
+}
+
+let allowedUsers = new Map<string, UserDataTokenBucket>();
+
+function allowRequestTokenBucket(userId: string): boolean {
+    let currentTime = Date.now();
+
+    if (!allowedUsers.has(userId)) {
+        const data: UserDataTokenBucket = {
+            tokens: bucketCapacity,
+            lastRefillTime: currentTime
+        }
+        allowedUsers.set(userId, data);
+    }
+
+    let user = allowedUsers.get(userId);
+
+    if (!user) {
+        throw new Error("User not found in rate limiter");
+    }
+    let timePassed = currentTime - user.lastRefillTime;
+
+    if (timePassed > refillTime) {
+        const intervalsPassed = Math.floor(timePassed / refillTime);
+        const tokensToAdd = intervalsPassed * refillRate;
+
+        user.tokens = Math.min(bucketCapacity, user.tokens + tokensToAdd);
+        user.lastRefillTime += intervalsPassed * refillTime;
+    }
+
+    if (user.tokens >= 1) {
+        user.tokens--;
+        return true;
+    } else {
+        return false;
+    }
+
+}
