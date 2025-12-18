@@ -1,6 +1,9 @@
+import { Request, Response, NextFunction } from "express";
+import { asyncHandler } from "../utils/asyncHandler";
+
 //Sliding Window Rate Limiter Middleware
 let windowSize = 60000; //1 minute
-let maxRequests = 100; //max 100 requests per window
+let maxRequest = 100; //max 100 requests per window
 let bucketNumber = 12;
 let bucketSize = 5000; // windowSize / bucketNumber = 60000 / 12 = 5000 requests per bucket
 
@@ -12,6 +15,17 @@ interface UserData {
 
 const users = new Map<string, UserData>();
 
+interface RateLimiterOptions {
+    windowMs?: number;
+    maxRequests?: number;
+    bucketCount?: number;
+    message?: string | ((req: Request, res: Response) => string);
+    statusCode?: number;
+    keyGenerator?: (req: Request) => string;
+    headers?: boolean; // Send standard RateLimit headers
+}
+
+//Initial version of sliding window
 function allowRequest(userId: string): boolean {
     const currentTime = Date.now();
     const currentBucketIndex = Math.floor((currentTime / bucketSize) % bucketNumber);
@@ -46,7 +60,7 @@ function allowRequest(userId: string): boolean {
     const totalRequests = data.counts.reduce((sum, count) => sum + count, 0);
 
     // Check if request is allowed before incrementing
-    if (totalRequests >= maxRequests) {
+    if (totalRequests >= maxRequest) {
         return false;
     }
 
@@ -58,7 +72,7 @@ function allowRequest(userId: string): boolean {
     return true;
 }
 
-//Token Bucket Rate Limiter Middleware
+//Initial version of Token Bucket Rate Limiter Middleware
 let bucketCapacity = 100;
 let refillRate = 10;
 let refillTime = 10000;
