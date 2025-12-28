@@ -45,18 +45,25 @@ function createSlidingWindowLimiter(options: RateLimiterOptions = {}) {
                 data = rawData as Record<string, string>;
             }
 
+            let pipeline = redis.multi();
             let updates: Record<string, string> = {};
             let totalRequests = 0;
             let counts: number[] = new Array(bucketCount).fill(0);
+            let shouldExpire = false;
 
             let isNewUser = !data || Object.keys(data).length === 0; 
 
             if(isNewUser){  
-                updates[`bucket_${currentBucketIndex}`] = '1';
-                updates.lastBucketIndex = currentBucketIndex.toString();
+                // updates[`bucket_${currentBucketIndex}`] = '1';
+                // updates.lastBucketIndex = currentBucketIndex.toString();
+                // await redis.hset(redisKey, updates);
+                // await redis.expire(redisKey, Math.ceil(windowMs / 1000));
+                pipeline.hset(redisKey, `bucket_${currentBucketIndex}`, '1');
+                pipeline.hset(redisKey, 'lastBucketIndex', currentBucketIndex.toString());
+                pipeline.expire(redisKey, Math.ceil(windowMs / 1000));
+                shouldExpire = true;
 
-                await redis.hset(redisKey, updates);
-                await redis.expire(redisKey, Math.ceil(windowMs / 1000));
+                await redis.exec();
 
                 const resetTime =  (Math.floor(now/windowMs) + 1) * windowMs;
                 if (headers) sendHeaders(res, maxRequests, maxRequests - 1, windowMs, resetTime);
@@ -77,13 +84,15 @@ function createSlidingWindowLimiter(options: RateLimiterOptions = {}) {
                 for (let i = 1; i <= bucketDiff; i++) {
                     const idx = (lastBucketIndex + i) % bucketCount;
                     counts[idx] = 0;
-                    updates[`bucket_${idx}`] = '0';
+                    // updates[`bucket_${idx}`] = '0';
+                    pipeline.hset(redisKey, `bucket_${idx}`, '0');
                 }
             }
 
             // Calculate current total
             totalRequests = counts.reduce((sum, count) => sum + count, 0);
-            updates.lastBucketIndex = currentBucketIndex.toString();
+            // updates.lastBucketIndex = currentBucketIndex.toString();
+            pipeline.hset(redisKey, 'lastBucketIndex', currentBucketIndex.toString());
             if (totalRequests >= maxRequests) {
 
                 await redis.hset(redisKey, updates);
@@ -104,10 +113,16 @@ function createSlidingWindowLimiter(options: RateLimiterOptions = {}) {
             // Allow and increment
             counts[currentBucketIndex] += 1;
 
-            updates[`bucket_${currentBucketIndex}`] = counts[currentBucketIndex].toString();
+            // updates[`bucket_${currentBucketIndex}`] = counts[currentBucketIndex].toString();
+            pipeline.hset(redisKey, `bucket_${currentBucketIndex}`, counts[currentBucketIndex].toString());
 
-            await redis.hset(redisKey, updates);
-            await redis.expire(redisKey, Math.ceil(windowMs / 1000));
+            // await redis.hset(redisKey, updates);
+            // await redis.expire(redisKey, Math.ceil(windowMs / 1000));
+
+            if (!shouldExpire) {
+                pipeline.expire(redisKey, Math.ceil(windowMs / 1000));
+            }
+            await pipeline.exec();
             
             const remaining = maxRequests - (totalRequests + 1);
             const resetTime = (Math.floor(now / windowMs) + 1) * windowMs;
