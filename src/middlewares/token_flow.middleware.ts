@@ -1,12 +1,11 @@
 // Implements a token bucket rate limiter
 
 import { Request, Response, NextFunction } from "express";
+import redisClient from "../infra/redis/redisClient";
 
 const DEFAULT_BUCKET_SIZE = 100;
 const DEFAULT_REFILL_RATE = 1; // tokens per second
 const DEFAULT_KEY_TTL_MS = 60 * 60 * 1000; // 1 hour
-
-const buckets = new Map();
 
 interface RateLimiterOptions {
   bucketSize?: number;
@@ -27,20 +26,39 @@ const createTokenBucketLimiter = (options: RateLimiterOptions = {}) => {
         },
     } = options;
 
-    return (req: Request, res: Response, next: NextFunction) => {
+    const redis = redisClient;
+
+    return async (req: Request, res: Response, next: NextFunction) => {
         try {
             const id = identifier(req);
             if (!id) return next();
 
+            const redisKey = `ratelimit:${id}`;
             const now = Date.now();
-            let bucket = buckets.get(id);
+            let bucketStr = await redis.get(redisKey);
+            let bucket: {
+                tokens: number,
+                lastRefill: number,
+                expiresAt: number
+            };
 
-            if (!bucket || bucket.expiresAt <= now) {
+            if (!bucketStr) {
                 bucket = {
                     tokens: bucketSize,
                     lastRefill: now,
                     expiresAt: now + keyTTL,
                 };
+            } else {
+                const parsed = JSON.parse(bucketStr);
+                if(parsed.expiresAt <= now){
+                    bucket = {
+                        tokens: parsed.tokens,
+                        lastRefill: parsed.lastRefill,
+                        expiresAt: parsed.expiresAt,
+                    }
+                } else {
+                   bucket = parsed; 
+                }
             }
 
             const elapsedSeconds = (now - bucket.lastRefill) / 1000;
@@ -79,7 +97,7 @@ const createTokenBucketLimiter = (options: RateLimiterOptions = {}) => {
             bucket.tokens -= 1;
             bucket.expiresAt = now + keyTTL;
 
-            buckets.set(id, bucket);
+            await redis.set(redisKey, JSON.stringify(bucket), {'EX': Math.floor(keyTTL/1000)});
             next();
         } catch (error) {
             onError(req, res, error);
